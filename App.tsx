@@ -27,8 +27,11 @@ const App: React.FC = () => {
 
   const createRoom = (initialChips: number, password?: string) => {
     if (!currentUser) return;
+    
+    const roomId = password ? password.toUpperCase().trim() : Math.random().toString(36).substr(2, 6).toUpperCase();
+    
     const newGameState: GameState = {
-      roomId: Math.random().toString(36).substr(2, 6).toUpperCase(),
+      roomId,
       password,
       status: GameStatus.SETUP,
       initialChips,
@@ -55,49 +58,51 @@ const App: React.FC = () => {
 
   const joinRoom = async (password?: string) => {
     if (!currentUser) return;
-    
-    // 入室前に入力された合言葉（ルームIDとして扱う）でルームを検索
-    if (!password) {
+    if (!password || !password.trim()) {
       alert("合言葉を入力してください。");
       return;
     }
 
     setIsJoining(true);
-    const targetRoomId = password.toUpperCase();
-    const remoteState = await fetchRoom(targetRoomId);
-    setIsJoining(false);
-
-    if (!remoteState) {
-      alert("ルームが見つかりません。合言葉（ルームID）を確認してください。");
-      return;
-    }
-
-    if (remoteState.password && remoteState.password !== password) {
-      // 実際にはパスワードとIDを分ける設計が望ましいですが、
-      // ここではパスワード自体をIDとして検索しています
-    }
+    const targetRoomId = password.toUpperCase().trim();
     
-    // 既に参加している場合は何もしない
-    if (remoteState.players.find(p => p.id === currentUser.id)) return;
+    try {
+      const remoteState = await fetchRoom(targetRoomId);
+      
+      if (!remoteState) {
+        alert("ルームが見つかりません。合言葉を確認してください。");
+        return;
+      }
 
-    const newPlayers = [...remoteState.players, {
-      id: currentUser.id,
-      name: currentUser.name,
-      chips: remoteState.initialChips,
-      bet: 0,
-      status: PlayerStatus.ACTIVE,
-      isOwner: false,
-      position: remoteState.players.length
-    }];
+      if (remoteState.players.find(p => p.id === currentUser.id)) {
+        updateGameState(remoteState);
+        return;
+      }
 
-    updateGameState({ ...remoteState, players: newPlayers });
+      const newPlayers = [...remoteState.players, {
+        id: currentUser.id,
+        name: currentUser.name,
+        chips: remoteState.initialChips,
+        bet: 0,
+        status: PlayerStatus.ACTIVE,
+        isOwner: false,
+        position: remoteState.players.length
+      }];
+
+      updateGameState({ ...remoteState, players: newPlayers });
+    } catch (e) {
+      console.error(e);
+      alert("通信エラーが発生しました。");
+    } finally {
+      setIsJoining(false);
+    }
   };
 
   const leaveRoom = () => {
     if (!currentUser || !gameState) return;
     const me = gameState.players.find(p => p.id === currentUser.id);
     if (me?.isOwner) {
-      if (confirm("オーナーが退出するとルームが削除される可能性があります。よろしいですか？")) {
+      if (confirm("オーナーが退出するとルームが削除されます。よろしいですか？")) {
         updateGameState(null);
       }
     } else {
@@ -132,7 +137,7 @@ const App: React.FC = () => {
         </div>
         <div className="mt-8 flex items-center gap-2 text-slate-500 text-xs">
           {isOnline ? <Wifi size={14} className="text-green-500" /> : <WifiOff size={14} className="text-amber-500" />}
-          <span>{isOnline ? 'Online Sync Enabled' : 'Local Mode Only'}</span>
+          <span>{isOnline ? 'Real-time Sync Active' : 'Offline Mode'}</span>
         </div>
       </div>
     );
@@ -144,7 +149,7 @@ const App: React.FC = () => {
         <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center">
           <div className="text-center space-y-4">
             <div className="w-12 h-12 border-4 border-green-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
-            <p className="font-bold text-green-500">ルームを探しています...</p>
+            <p className="font-bold text-green-500">同期中...</p>
           </div>
         </div>
       )}
