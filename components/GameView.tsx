@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { GameState, GameStatus, PlayerStatus, Player } from '../types';
-import { ChevronRight, Circle, Coins, User, Trophy, Info, X } from 'lucide-react';
+import { ChevronRight, Circle, Coins, User, Trophy, Info, X, ArrowRightCircle } from 'lucide-react';
 import WinnerSelection from './WinnerSelection';
 
 interface GameViewProps {
@@ -12,13 +12,13 @@ interface GameViewProps {
 
 const GameView: React.FC<GameViewProps> = ({ gameState, updateGameState, currentUser }) => {
   const [isWinnerSelection, setIsWinnerSelection] = useState(false);
-  const [raiseAmount, setRaiseAmount] = useState(gameState.minBet + gameState.lastRaiseAmount);
+  const [raiseAmount, setRaiseAmount] = useState(0);
 
   const me = gameState.players.find(p => p.id === currentUser.id);
   const myTurn = gameState.players[gameState.currentTurnIndex]?.id === currentUser.id;
   const isOwner = me?.isOwner;
 
-  // Feedback vibration
+  // フィードバック用のバイブレーション
   const vibrate = useCallback(() => {
     if (window.navigator && window.navigator.vibrate) {
       window.navigator.vibrate(50);
@@ -26,11 +26,11 @@ const GameView: React.FC<GameViewProps> = ({ gameState, updateGameState, current
   }, []);
 
   useEffect(() => {
-    // Reset raise slider when it becomes your turn
     if (myTurn) {
-      setRaiseAmount(gameState.minBet + gameState.lastRaiseAmount);
+      const minRaiseTo = gameState.minBet + gameState.lastRaiseAmount;
+      setRaiseAmount(Math.min(me?.chips ? me.chips + me.bet : 0, minRaiseTo));
     }
-  }, [myTurn, gameState.minBet, gameState.lastRaiseAmount]);
+  }, [myTurn, gameState.minBet, gameState.lastRaiseAmount, me?.chips, me?.bet]);
 
   const handleAction = (type: 'FOLD' | 'CHECK_CALL' | 'RAISE') => {
     vibrate();
@@ -48,11 +48,9 @@ const GameView: React.FC<GameViewProps> = ({ gameState, updateGameState, current
       currentPlayer.bet += callAmount;
       newPot += callAmount;
     } else if (type === 'RAISE') {
-      const totalToBet = raiseAmount;
-      const additional = totalToBet - currentPlayer.bet;
-      
-      newLastRaiseAmount = totalToBet - gameState.minBet;
-      newMinBet = totalToBet;
+      const additional = raiseAmount - currentPlayer.bet;
+      newLastRaiseAmount = raiseAmount - gameState.minBet;
+      newMinBet = raiseAmount;
       currentPlayer.chips -= additional;
       currentPlayer.bet += additional;
       newPot += additional;
@@ -62,41 +60,56 @@ const GameView: React.FC<GameViewProps> = ({ gameState, updateGameState, current
       }
     }
 
-    // Determine next player
+    // 次のプレイヤーを決定
     let nextIndex = (gameState.currentTurnIndex + 1) % newPlayers.length;
-    let roundsCounted = 0;
-    while (
-      (newPlayers[nextIndex].status !== PlayerStatus.ACTIVE && 
-       newPlayers[nextIndex].status !== PlayerStatus.ALL_IN) || 
-      (type !== 'RAISE' && newPlayers[nextIndex].bet === newMinBet && newPlayers[nextIndex].status !== PlayerStatus.FOLDED)
-    ) {
-      if (roundsCounted > newPlayers.length) break;
-      nextIndex = (nextIndex + 1) % newPlayers.length;
-      roundsCounted++;
+    const nonFoldedPlayers = newPlayers.filter(p => p.status !== PlayerStatus.FOLDED);
+    const activePlayers = newPlayers.filter(p => p.status === PlayerStatus.ACTIVE);
+
+    // 全員フォールドして1人になった場合
+    if (nonFoldedPlayers.length === 1) {
+      updateGameState({
+        ...gameState,
+        players: newPlayers,
+        pot: newPot,
+        status: GameStatus.WINNER_SELECTION
+      });
+      if (isOwner) setIsWinnerSelection(true);
+      return;
     }
 
-    // Check if round is over
-    const activePlayers = newPlayers.filter(p => p.status === PlayerStatus.ACTIVE);
-    const allBetsEqual = newPlayers.filter(p => p.status === PlayerStatus.ACTIVE || p.status === PlayerStatus.ALL_IN)
-                                   .every(p => p.bet === newMinBet || p.status === PlayerStatus.ALL_IN);
+    // 全員のベット額が揃ったかチェック
+    const allBetsMatched = nonFoldedPlayers.every(p => p.bet === newMinBet || p.status === PlayerStatus.ALL_IN);
     
-    // Only one player left
-    const nonFoldedCount = newPlayers.filter(p => p.status !== PlayerStatus.FOLDED).length;
-    
-    if (nonFoldedCount <= 1 || (allBetsEqual && roundsCounted >= newPlayers.length)) {
-      // Round over
-      if (isOwner) {
-        setIsWinnerSelection(true);
-      }
+    // ラウンド終了の判定
+    // (レイズなしのチェック一周、または全員が同じ額をベット済み)
+    const isRoundOver = allBetsMatched && (
+      (type !== 'RAISE' && nextIndex === (gameState.dealerIndex + 1) % newPlayers.length) || 
+      (type === 'RAISE' && false) // レイズされたらもう一周必要
+    );
+
+    // シンプルな判定ロジックに修正（全員がアクションを完了し、額が揃っている）
+    const everyoneActed = newPlayers.every(p => 
+      p.status === PlayerStatus.FOLDED || 
+      p.status === PlayerStatus.ALL_IN || 
+      (p.bet === newMinBet && p.status === PlayerStatus.ACTIVE)
+    );
+
+    if (everyoneActed) {
+      // ラウンド終了、オーナーが次のストリートへ進めるようにステータスを変更
       updateGameState({
         ...gameState,
         players: newPlayers,
         pot: newPot,
         minBet: newMinBet,
         lastRaiseAmount: newLastRaiseAmount,
-        status: GameStatus.WINNER_SELECTION
+        status: GameStatus.WINNER_SELECTION // ここでは「勝者選択または次ラウンド」待機状態として流用
       });
     } else {
+      // 次の有効なプレイヤーまで飛ばす
+      while (newPlayers[nextIndex].status === PlayerStatus.FOLDED || newPlayers[nextIndex].status === PlayerStatus.ALL_IN) {
+        nextIndex = (nextIndex + 1) % newPlayers.length;
+      }
+      
       updateGameState({
         ...gameState,
         players: newPlayers,
@@ -108,9 +121,36 @@ const GameView: React.FC<GameViewProps> = ({ gameState, updateGameState, current
     }
   };
 
-  const nextStreet = (winners: string[]) => {
-    // This is managed by WinnerSelection usually, but we could trigger it from here too
-    // If winners selected, distribute pot and start new hand or move to next street
+  const advanceStreet = () => {
+    vibrate();
+    const streets: ('Pre-flop' | 'Flop' | 'Turn' | 'River')[] = ['Pre-flop', 'Flop', 'Turn', 'River'];
+    const currentIdx = streets.indexOf(gameState.street);
+    
+    if (currentIdx === streets.length - 1) {
+      // リバーが終わっていたら勝者選択へ
+      setIsWinnerSelection(true);
+      return;
+    }
+
+    // 次のストリートへ。ベットを0にリセット
+    const newStreet = streets[currentIdx + 1];
+    const newPlayers = gameState.players.map(p => ({ ...p, bet: 0 }));
+    
+    // 次のターンはディーラーの左隣から
+    let nextIndex = (gameState.dealerIndex + 1) % newPlayers.length;
+    while (newPlayers[nextIndex].status === PlayerStatus.FOLDED || newPlayers[nextIndex].status === PlayerStatus.ALL_IN) {
+      nextIndex = (nextIndex + 1) % newPlayers.length;
+    }
+
+    updateGameState({
+      ...gameState,
+      status: GameStatus.PLAYING,
+      street: newStreet,
+      players: newPlayers,
+      currentTurnIndex: nextIndex,
+      minBet: 0,
+      lastRaiseAmount: gameState.bbAmount
+    });
   };
 
   const resetHand = (winners: string[]) => {
@@ -123,14 +163,13 @@ const GameView: React.FC<GameViewProps> = ({ gameState, updateGameState, current
       if (winners.includes(p.id)) {
         chips += share;
       }
-      // Simple logic: return leftover to first winner
       if (winners[0] === p.id) {
         chips += remainder;
       }
       return { 
         ...p, 
         bet: 0, 
-        status: p.chips > 0 ? PlayerStatus.ACTIVE : PlayerStatus.OUT 
+        status: (p.chips + (winners.includes(p.id) ? share : 0)) > 0 ? PlayerStatus.ACTIVE : PlayerStatus.OUT 
       };
     });
 
@@ -139,7 +178,7 @@ const GameView: React.FC<GameViewProps> = ({ gameState, updateGameState, current
     const bbIdx = (nextDealer + 2) % newPlayers.length;
     const sbAmount = Math.floor(gameState.bbAmount / 2);
 
-    // Auto-apply blinds for next hand
+    // ブラインドの自動適用
     newPlayers[sbIdx].chips -= sbAmount;
     newPlayers[sbIdx].bet = sbAmount;
     newPlayers[bbIdx].chips -= gameState.bbAmount;
@@ -163,38 +202,44 @@ const GameView: React.FC<GameViewProps> = ({ gameState, updateGameState, current
     <div className="flex-1 flex flex-col overflow-hidden relative">
       {/* Table Section */}
       <div className="flex-[4] casino-gradient relative overflow-hidden flex flex-col items-center justify-center p-4">
-        {/* Pot */}
-        <div className="z-10 bg-black/40 backdrop-blur-md rounded-full px-8 py-4 border border-white/10 shadow-2xl flex flex-col items-center">
-          <span className="text-slate-400 text-xs font-bold uppercase tracking-widest">TOTAL POT</span>
-          <div className="flex items-center gap-2 text-3xl font-black text-yellow-400 font-mono">
-            <Coins size={24} />
-            {gameState.pot.toLocaleString()}
+        {/* Pot & Street Info */}
+        <div className="z-10 flex flex-col items-center gap-2">
+          <div className="bg-white/10 backdrop-blur-md px-4 py-1 rounded-full border border-white/20 text-[10px] font-black tracking-widest text-white/60 uppercase">
+            {gameState.street}
+          </div>
+          <div className="bg-black/40 backdrop-blur-xl rounded-3xl px-10 py-5 border border-white/10 shadow-2xl flex flex-col items-center min-w-[200px]">
+            <span className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-1">TOTAL POT</span>
+            <div className="flex items-center gap-2 text-4xl font-black text-yellow-400 font-mono">
+              <Coins size={28} />
+              {gameState.pot.toLocaleString()}
+            </div>
           </div>
         </div>
 
-        {/* Players List in a Scrollable Area but positioned nicely */}
-        <div className="w-full mt-8 max-w-sm space-y-2 overflow-y-auto max-h-[50vh] pr-2 scrollbar-hide">
+        {/* Players List */}
+        <div className="w-full mt-6 max-w-sm space-y-2 overflow-y-auto max-h-[45vh] pr-2 scrollbar-hide">
           {gameState.players.map((player, idx) => {
-            const isActive = gameState.currentTurnIndex === idx;
+            const isActive = gameState.currentTurnIndex === idx && gameState.status === GameStatus.PLAYING;
             const isMe = player.id === currentUser.id;
             const isDealer = gameState.dealerIndex === idx;
+            const isFolded = player.status === PlayerStatus.FOLDED;
             
             return (
               <div 
                 key={player.id}
                 className={`flex items-center gap-3 p-3 rounded-2xl transition-all border ${
                   isActive 
-                  ? 'bg-green-500/20 border-green-500 shadow-[0_0_15px_rgba(34,197,94,0.3)]' 
-                  : 'bg-black/20 border-white/5'
+                  ? 'bg-green-500/20 border-green-500 shadow-[0_0_15px_rgba(34,197,94,0.3)] scale-[1.02]' 
+                  : isFolded ? 'bg-black/10 border-white/5 opacity-40' : 'bg-black/20 border-white/5'
                 }`}
               >
                 <div className="relative">
-                  <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold relative overflow-hidden ${
-                    player.status === PlayerStatus.FOLDED ? 'grayscale opacity-50 bg-slate-800' : 'bg-slate-700'
+                  <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold relative ${
+                    isFolded ? 'bg-slate-800' : 'bg-slate-700 shadow-inner'
                   }`}>
                     {player.name[0]}
                     {isDealer && (
-                      <div className="absolute -bottom-1 -right-1 bg-white text-black text-[10px] font-black w-5 h-5 rounded-full flex items-center justify-center border-2 border-slate-900 shadow-sm">D</div>
+                      <div className="absolute -bottom-1 -right-1 bg-white text-black text-[10px] font-black w-5 h-5 rounded-full flex items-center justify-center border-2 border-slate-900 shadow-md">D</div>
                     )}
                   </div>
                   {isActive && (
@@ -204,23 +249,22 @@ const GameView: React.FC<GameViewProps> = ({ gameState, updateGameState, current
 
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between">
-                    <span className={`font-bold truncate ${isMe ? 'text-green-400' : 'text-slate-100'}`}>
+                    <span className={`font-bold truncate text-sm ${isMe ? 'text-green-400' : 'text-slate-100'}`}>
                       {player.name}
                     </span>
                     {player.bet > 0 && (
-                      <span className="text-yellow-400 font-mono font-bold text-sm bg-yellow-400/10 px-2 py-0.5 rounded-lg border border-yellow-400/20 flex items-center gap-1">
-                        <Coins size={12} /> {player.bet}
+                      <span className="text-yellow-400 font-mono font-bold text-xs bg-yellow-400/10 px-2 py-0.5 rounded-lg border border-yellow-400/20 flex items-center gap-1 animate-in zoom-in-75">
+                        <Coins size={10} /> {player.bet}
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center justify-between text-xs">
+                  <div className="flex items-center justify-between text-[10px]">
                     <span className="text-slate-400">Chips: <span className="text-slate-200">{player.chips.toLocaleString()}</span></span>
-                    <span className={`font-bold ${
-                      player.status === PlayerStatus.FOLDED ? 'text-slate-600' : 
-                      player.status === PlayerStatus.ALL_IN ? 'text-red-400' : 'text-slate-400'
+                    <span className={`font-black ${
+                      isFolded ? 'text-slate-600' : 
+                      player.status === PlayerStatus.ALL_IN ? 'text-red-400' : 'text-slate-500'
                     }`}>
-                      {player.status === PlayerStatus.FOLDED ? 'FOLDED' : 
-                       player.status === PlayerStatus.ALL_IN ? 'ALL IN' : 'IN GAME'}
+                      {isFolded ? 'FOLDED' : player.status === PlayerStatus.ALL_IN ? 'ALL IN' : 'IN GAME'}
                     </span>
                   </div>
                 </div>
@@ -231,20 +275,20 @@ const GameView: React.FC<GameViewProps> = ({ gameState, updateGameState, current
       </div>
 
       {/* Action Section */}
-      <div className="flex-[3] bg-slate-900 border-t border-slate-800 p-4 flex flex-col gap-4">
+      <div className="flex-[3] bg-slate-900 border-t border-slate-800 p-4 flex flex-col gap-4 shadow-[0_-10px_30px_rgba(0,0,0,0.5)] z-20">
         {myTurn && gameState.status === GameStatus.PLAYING ? (
-          <div className="flex-1 flex flex-col gap-4 animate-in slide-in-from-bottom-6">
-            <div className="flex items-center justify-between bg-slate-800/50 p-3 rounded-xl border border-slate-700">
+          <div className="flex-1 flex flex-col gap-3 animate-in slide-in-from-bottom-6">
+            <div className="flex items-center justify-between bg-slate-800/50 p-3 rounded-2xl border border-slate-700/50">
               <div className="flex flex-col">
-                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">コールに必要な額</span>
-                <span className="text-lg font-mono font-bold text-slate-200">
+                <span className="text-[9px] text-slate-500 font-black uppercase tracking-widest">TO CALL</span>
+                <span className="text-xl font-mono font-black text-white">
                   {Math.max(0, gameState.minBet - (me?.bet || 0))}
                 </span>
               </div>
-              <div className="h-full w-px bg-slate-700 mx-2"></div>
+              <div className="h-8 w-px bg-slate-700 mx-2"></div>
               <div className="flex flex-col text-right">
-                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">あなたの残りチップ</span>
-                <span className="text-lg font-mono font-bold text-green-400">
+                <span className="text-[9px] text-slate-500 font-black uppercase tracking-widest">YOUR STACK</span>
+                <span className="text-xl font-mono font-black text-green-400">
                   {me?.chips.toLocaleString()}
                 </span>
               </div>
@@ -253,20 +297,20 @@ const GameView: React.FC<GameViewProps> = ({ gameState, updateGameState, current
             <div className="flex gap-2">
               <button
                 onClick={() => handleAction('FOLD')}
-                className="flex-1 bg-slate-800 text-slate-300 font-bold py-5 rounded-2xl active:bg-slate-700 transition-colors shadow-lg active:scale-95"
+                className="flex-1 bg-slate-800 text-slate-400 font-black py-5 rounded-2xl active:bg-slate-700 transition-all shadow-lg active:scale-95 border border-slate-700/50"
               >
                 FOLD
               </button>
               <button
                 onClick={() => handleAction('CHECK_CALL')}
-                className="flex-[2] bg-green-600 text-white font-bold py-5 rounded-2xl shadow-xl shadow-green-900/20 active:bg-green-500 active:scale-95 transition-all text-lg"
+                className="flex-[2] bg-green-600 text-white font-black py-5 rounded-2xl shadow-xl shadow-green-900/20 active:bg-green-500 active:scale-95 transition-all text-lg border-b-4 border-green-800"
               >
                 {gameState.minBet === me?.bet ? 'CHECK' : `CALL ${Math.min(me?.chips || 0, gameState.minBet - (me?.bet || 0))}`}
               </button>
             </div>
 
-            <div className="space-y-3">
-              <div className="flex items-center justify-between text-xs font-bold text-slate-400 px-1">
+            <div className="space-y-2 mt-1">
+              <div className="flex items-center justify-between text-[10px] font-black text-slate-500 px-1">
                 <span>RAISE TO</span>
                 <span className="text-yellow-400 font-mono text-lg">{raiseAmount}</span>
               </div>
@@ -281,8 +325,8 @@ const GameView: React.FC<GameViewProps> = ({ gameState, updateGameState, current
               />
               <button
                 onClick={() => handleAction('RAISE')}
-                disabled={me?.chips === 0}
-                className="w-full bg-slate-100 text-slate-900 font-black py-4 rounded-2xl disabled:opacity-20 active:scale-95 transition-all"
+                disabled={me?.chips === 0 || (me?.chips || 0) + (me?.bet || 0) < gameState.minBet + gameState.lastRaiseAmount}
+                className="w-full bg-slate-100 text-slate-900 font-black py-4 rounded-2xl disabled:opacity-20 active:scale-95 transition-all border-b-4 border-slate-300"
               >
                 RAISE TO {raiseAmount}
               </button>
@@ -291,24 +335,48 @@ const GameView: React.FC<GameViewProps> = ({ gameState, updateGameState, current
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center text-slate-500 gap-4">
             {gameState.status === GameStatus.WINNER_SELECTION ? (
-              <div className="text-center">
-                <Trophy size={48} className="text-amber-500 mx-auto mb-2 animate-bounce" />
-                <h3 className="text-xl font-bold text-slate-200">ラウンド終了</h3>
+              <div className="text-center w-full max-w-xs space-y-4">
+                <div className="bg-green-500/10 border border-green-500/30 p-4 rounded-2xl">
+                  <h3 className="text-lg font-black text-green-400 mb-1">ベッティング完了</h3>
+                  <p className="text-xs text-slate-400">全員のベットが揃いました。</p>
+                </div>
+                
                 {isOwner && (
-                  <button 
-                    onClick={() => setIsWinnerSelection(true)}
-                    className="mt-4 bg-amber-500 text-slate-900 font-bold px-8 py-3 rounded-full active:scale-95 transition-all shadow-lg"
-                  >
-                    勝者を選択
-                  </button>
+                  <div className="grid grid-cols-1 gap-3">
+                    {gameState.street !== 'River' && gameState.players.filter(p => p.status !== PlayerStatus.FOLDED).length > 1 ? (
+                      <button 
+                        onClick={advanceStreet}
+                        className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl active:scale-95 transition-all shadow-lg flex items-center justify-center gap-2"
+                      >
+                        <ArrowRightCircle size={20} />
+                        次のカードを配る ({gameState.street === 'Pre-flop' ? 'FLOP' : gameState.street === 'Flop' ? 'TURN' : 'RIVER'})
+                      </button>
+                    ) : null}
+                    <button 
+                      onClick={() => setIsWinnerSelection(true)}
+                      className={`w-full font-black py-4 rounded-2xl active:scale-95 transition-all shadow-lg flex items-center justify-center gap-2 ${
+                        gameState.street === 'River' || gameState.players.filter(p => p.status !== PlayerStatus.FOLDED).length === 1
+                        ? 'bg-amber-500 text-slate-900 shadow-amber-900/20'
+                        : 'bg-slate-800 text-slate-400 border border-slate-700'
+                      }`}
+                    >
+                      <Trophy size={20} />
+                      勝者を選択して終了
+                    </button>
+                  </div>
                 )}
-                {!isOwner && <p className="mt-2 text-sm">オーナーが勝者を決定しています...</p>}
+                {!isOwner && (
+                  <div className="animate-pulse flex flex-col items-center gap-2">
+                    <Info size={24} />
+                    <p className="text-sm">オーナーが次へ進めるのを待っています...</p>
+                  </div>
+                )}
               </div>
             ) : (
-              <div className="text-center space-y-2 opacity-50">
-                <Info size={32} className="mx-auto" />
-                <p className="font-medium">
-                  {gameState.players[gameState.currentTurnIndex]?.name}のアクション待ちです
+              <div className="text-center space-y-3 opacity-50">
+                <div className="w-12 h-12 border-2 border-slate-700 border-t-slate-400 rounded-full animate-spin mx-auto"></div>
+                <p className="font-bold text-sm tracking-wide">
+                  {gameState.players[gameState.currentTurnIndex]?.name}のアクション待ち...
                 </p>
               </div>
             )}
