@@ -1,0 +1,5 @@
+{
+  "name": "Poker Chip Master",
+  "description": "A mobile-first real-time poker chip and turn manager for physical games. Track pots, player stacks, and betting rounds with ease.",
+  "requestFramePermissions": []
+}
