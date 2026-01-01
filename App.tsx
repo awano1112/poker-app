@@ -12,19 +12,12 @@ const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<{ id: string; name: string } | null>(null);
   const [isJoining, setIsJoining] = useState(false);
 
-  // 初回起動時に前回の名前を「候補」として出すが、必須ではない
-  useEffect(() => {
-    const savedName = localStorage.getItem('poker_last_name');
-    if (savedName && !currentUser) {
-      // 自動ログインはせず、入力フィールドの初期値などに使うための準備（任意）
-    }
-  }, []);
-
   const handleLogin = (name: string) => {
     if (!name.trim()) return;
+    // IDはセッションごとに新しく発行することで、完全に「使い捨て」にする
     const user = { id: Math.random().toString(36).substr(2, 9), name: name.trim() };
     setCurrentUser(user);
-    // 次回の入力の手間を減らすために名前だけ記憶しておく
+    // 入力の便宜上、名前だけは記憶しておく
     localStorage.setItem('poker_last_name', name.trim());
   };
 
@@ -105,16 +98,21 @@ const App: React.FC = () => {
     }
   };
 
-  const leaveRoom = () => {
+  const leaveRoom = async () => {
     if (!currentUser || !gameState) return;
     const me = gameState.players.find((p: Player) => p.id === currentUser.id);
+    
     if (me?.isOwner) {
       if (confirm("オーナーが退出するとルームが削除されます。よろしいですか？")) {
-        updateGameState(null);
+        await updateGameState(null); // ルーム削除
       }
     } else {
+      // 一般プレイヤーは自分を除去した状態を同期し、自分はローカルステートをクリアしてロビーへ
       const newPlayers = gameState.players.filter((p: Player) => p.id !== currentUser.id);
-      updateGameState({ ...gameState, players: newPlayers });
+      await updateGameState({ ...gameState, players: newPlayers });
+      // 自分の画面をロビーに戻すためにローカルストレージとステートをリセット
+      localStorage.removeItem('poker_chip_master_state');
+      window.location.reload(); // 最も確実に同期を切り離してロビーに戻す方法
     }
   };
 
