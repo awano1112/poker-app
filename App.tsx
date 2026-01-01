@@ -12,17 +12,24 @@ const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<{ id: string; name: string } | null>(null);
   const [isJoining, setIsJoining] = useState(false);
 
+  // 初回起動時に前回の名前を「候補」として出すが、必須ではない
   useEffect(() => {
-    const savedUser = localStorage.getItem('poker_user');
-    if (savedUser) {
-      setCurrentUser(JSON.parse(savedUser));
+    const savedName = localStorage.getItem('poker_last_name');
+    if (savedName && !currentUser) {
+      // 自動ログインはせず、入力フィールドの初期値などに使うための準備（任意）
     }
   }, []);
 
   const handleLogin = (name: string) => {
-    const user = { id: Math.random().toString(36).substr(2, 9), name };
+    if (!name.trim()) return;
+    const user = { id: Math.random().toString(36).substr(2, 9), name: name.trim() };
     setCurrentUser(user);
-    localStorage.setItem('poker_user', JSON.stringify(user));
+    // 次回の入力の手間を減らすために名前だけ記憶しておく
+    localStorage.setItem('poker_last_name', name.trim());
+  };
+
+  const logout = () => {
+    setCurrentUser(null);
   };
 
   const createRoom = (initialChips: number, password?: string) => {
@@ -74,7 +81,7 @@ const App: React.FC = () => {
         return;
       }
 
-      if (remoteState.players.find(p => p.id === currentUser.id)) {
+      if (remoteState.players.find((p: Player) => p.id === currentUser.id)) {
         updateGameState(remoteState);
         return;
       }
@@ -100,13 +107,13 @@ const App: React.FC = () => {
 
   const leaveRoom = () => {
     if (!currentUser || !gameState) return;
-    const me = gameState.players.find(p => p.id === currentUser.id);
+    const me = gameState.players.find((p: Player) => p.id === currentUser.id);
     if (me?.isOwner) {
       if (confirm("オーナーが退出するとルームが削除されます。よろしいですか？")) {
         updateGameState(null);
       }
     } else {
-      const newPlayers = gameState.players.filter(p => p.id !== currentUser.id);
+      const newPlayers = gameState.players.filter((p: Player) => p.id !== currentUser.id);
       updateGameState({ ...gameState, players: newPlayers });
     }
   };
@@ -117,10 +124,12 @@ const App: React.FC = () => {
         <Trophy size={64} className="text-yellow-500 mb-6" />
         <h1 className="text-3xl font-bold mb-8">Poker Chip Master</h1>
         <div className="w-full max-w-sm space-y-4">
+          <label className="block text-sm font-medium text-slate-400 ml-1">プレイヤー名を入力</label>
           <input
             type="text"
-            placeholder="あなたの表示名"
-            className="w-full bg-slate-800 border border-slate-700 rounded-xl p-4 text-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+            defaultValue={localStorage.getItem('poker_last_name') || ''}
+            placeholder="例: ラッキーくん"
+            className="w-full bg-slate-800 border border-slate-700 rounded-xl p-4 text-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-white"
             onKeyDown={(e) => {
               if (e.key === 'Enter') handleLogin((e.target as HTMLInputElement).value);
             }}
@@ -132,7 +141,7 @@ const App: React.FC = () => {
             }}
             className="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-4 rounded-xl transition-all shadow-lg active:scale-95"
           >
-            はじめる
+            次へ進む
           </button>
         </div>
         <div className="mt-8 flex items-center gap-2 text-slate-500 text-xs">
@@ -154,7 +163,7 @@ const App: React.FC = () => {
         </div>
       )}
       {!gameState ? (
-        <Lobby onJoin={joinRoom} onCreate={createRoom} />
+        <Lobby onJoin={joinRoom} onCreate={createRoom} onBack={logout} currentUser={currentUser} />
       ) : gameState.status === GameStatus.SETUP ? (
         <Setup 
           gameState={gameState} 
